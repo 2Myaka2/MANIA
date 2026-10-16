@@ -1,0 +1,23 @@
+# Synthetic tutorial: copy this YAML and tiny.pdb into your own analysis directory.
+schema_version: mania.run_config.v1
+project: constructed-tiny
+systems:
+- id: tiny-protein
+  trajectory_id: tiny
+  replica_id: r1
+  condition: constructed
+  engine: gromacs
+  topology: tiny.pdb
+  trajectories:
+  - tiny.pdb
+  pbc:
+    mode: nonperiodic
+    declaration: Explicit constructed nonperiodic PDB fixture; not a real GROMACS
+      input
+mode: basic
+output:
+  root: results-basic
+  overwrite: false
+methods:
+  rg:
+    enabled: false

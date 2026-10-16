@@ -1,0 +1,73 @@
+{
+  "contract_version": 1,
+  "kind": "mania_publication_contact_definition_authority",
+  "occupancy_denominator_template": "n_contact_frames / resolved_frame_count; {resolved_samples} resolved samples; missing samples excluded",
+  "pbc_path_fields": [
+    "protocol_authority",
+    "trajectory_preparation_and_diagnostics"
+  ],
+  "pbc_required_values": {
+    "external_protocol_approved": true,
+    "historical_scientific_pbc_status": "unresolved",
+    "internal_mic": false
+  },
+  "protein": {
+    "contact_layer": "protein-protein",
+    "source_artifact_role": "accepted_edge_semantics",
+    "specialized_distance_semantics": null,
+    "units": {}
+  },
+  "schema_version": "mania.publication_contact_definition_authority.v1",
+  "shared_parameters": {
+    "episode_continuity_semantics": "Consecutive requested sample indexes; resolved negatives and missing samples break episodes; each window independent",
+    "gap_tolerance": 0,
+    "lifetime_semantics": "last contact actual time minus first contact actual time in ns; single-frame episode = 0"
+  },
+  "specialized_definitions": [
+    {
+      "contact_definition_id": "protein_lipid",
+      "contact_layer": "protein-lipid",
+      "interaction_type": "protein_lipid",
+      "parameters": {
+        "atom_selections": "Authoritative topology heavy atoms; protein residue against complete accepted molecular partner",
+        "cutoff": {
+          "comparator": "<=",
+          "unit": "angstrom",
+          "value": 6.0
+        },
+        "distance_definition": "minimum Cartesian heavy-atom distance",
+        "specialized_distance_semantics": "Mean and minimum of per-frame minimum distances over ordinary contact-positive frames only",
+        "type_specific_parameters": {
+          "anchor_exclusion": null
+        }
+      },
+      "source_artifact_role": "accepted_specialized_window_contract",
+      "units": {
+        "$/cutoff/value": "angstrom"
+      }
+    },
+    {
+      "contact_definition_id": "protein_glycan",
+      "contact_layer": "protein-glycan",
+      "interaction_type": "protein_glycan",
+      "parameters": {
+        "atom_selections": "Authoritative topology heavy atoms; protein residue against complete accepted molecular partner",
+        "cutoff": {
+          "comparator": "<=",
+          "unit": "angstrom",
+          "value": 4.5
+        },
+        "distance_definition": "minimum Cartesian heavy-atom distance",
+        "specialized_distance_semantics": "Mean and minimum of per-frame minimum distances over ordinary contact-positive frames only",
+        "type_specific_parameters": {
+          "anchor_exclusion": "Carrier-first-sugar linkage excluded from ordinary glycan summaries"
+        }
+      },
+      "source_artifact_role": "accepted_specialized_window_contract",
+      "units": {
+        "$/cutoff/value": "angstrom"
+      }
+    }
+  ],
+  "specialized_partner_binding_field": "partner_catalog"
+}

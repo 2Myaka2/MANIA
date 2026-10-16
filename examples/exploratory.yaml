@@ -1,0 +1,21 @@
+# Synthetic tutorial: copy this YAML and tiny.pdb into your own analysis directory.
+# Deliberately unverified declaration demonstrates qualification warnings.
+schema_version: mania.run_config.v1
+project: constructed-tiny
+systems:
+- id: tiny-protein
+  trajectory_id: tiny
+  replica_id: r1
+  condition: constructed
+  engine: gromacs
+  topology: tiny.pdb
+  trajectories:
+  - tiny.pdb
+  pbc:
+    mode: unverified
+    declaration: Synthetic PDB read as supplied; PBC suitability deliberately
+      unverified for this tutorial, not evidence about a real trajectory
+mode: exploratory
+output:
+  root: results-exploratory
+  overwrite: false

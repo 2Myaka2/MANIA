@@ -1,0 +1,27 @@
+# Supply exact source identities and complete authority files; no real inputs bundled.
+# The profile documentation test binds this template to constructed complete sources.
+schema_version: mania.run_config.v1
+project: SUPPLIED_PROJECT
+mode: custom
+systems:
+- id: SUPPLIED_SYSTEM
+  trajectory_id: SUPPLIED_TRAJECTORY
+  replica_id: SUPPLIED_REPLICA
+  engine: gromacs
+  topology: sources/declared.top
+  trajectories:
+  - sources/declared.traj
+  pbc:
+    mode: nonperiodic
+    declaration: Coordinate-free replay of completed source evidence
+output:
+  root: profile-result
+methods:
+  profile_outputs: {}
+extensions:
+- id: napi2b
+  version: ==0.2.0
+  profile: napi2b.dataset.v1
+  options:
+    qc_manifest_path: sources/dataset_bindings.json
+    release_input_manifest_path: sources/publication_inputs.json

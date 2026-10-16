@@ -1,0 +1,14 @@
+graft examples
+prune tests
+prune evidence
+prune audit
+prune production
+prune .git
+prune .venv
+prune .pytest_cache
+prune .ruff_cache
+prune .mypy_cache
+prune build
+prune dist
+global-exclude *.pyc *.pyo
+global-exclude */__pycache__/*

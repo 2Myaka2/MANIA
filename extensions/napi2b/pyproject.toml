@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mania-napi2b"
+version = "0.2.0"
+description = "Explicit fixed NaPi2b reference and biological profile for MANIA."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["mania-wania==0.2.0"]
+
+[project.entry-points."mania.extensions"]
+napi2b = "mania_napi2b.profile:get_extension"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mania_napi2b"]
+namespaces = false
+
+[tool.setuptools.package-data]
+mania_napi2b = [
+  "data/canonical/slc34a2_o95436_reference.json",
+  "data/publication/contact_definition_authority_v1.json",
+]

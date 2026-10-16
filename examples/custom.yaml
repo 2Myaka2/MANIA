@@ -1,0 +1,31 @@
+# Synthetic tutorial: copy this YAML and tiny.pdb into your own analysis directory.
+# Rg eligibility requires separate scientific authority.
+schema_version: mania.run_config.v1
+project: constructed-tiny
+systems:
+- id: tiny-protein
+  trajectory_id: tiny
+  replica_id: r1
+  condition: constructed
+  engine: gromacs
+  topology: tiny.pdb
+  trajectories:
+  - tiny.pdb
+  pbc:
+    mode: nonperiodic
+    declaration: Explicit constructed nonperiodic PDB fixture; not a real GROMACS
+      input
+mode: custom
+output:
+  root: results-custom
+  overwrite: false
+methods:
+  contacts: {}
+  static_rin: {}
+  rg:
+    enabled: false
+  rmsd:
+    fit_selection: index 0 1 2
+    evaluation_selection: index 3
+    reference:
+      kind: first_selected
