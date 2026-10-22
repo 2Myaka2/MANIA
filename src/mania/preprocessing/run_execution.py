@@ -66,6 +66,21 @@ def validate_authorities(config: RunConfig) -> None:
                     "a group scope"
                 )
             rmsd = options.get("rmsd")
+            for name in ("rmsf", "sasa"):
+                atomic_option = options.get(name)
+                if atomic_option is None or not atomic_option.enabled:
+                    continue
+                reference = getattr(atomic_option, "reference", None)
+                if reference is not None and reference.kind == "external":
+                    from mania.result_readers import read_external_inputs
+
+                    _, pairing = read_external_inputs(
+                        system, atomic_option, verify=False
+                    )
+                    if pairing.identity != system.identity(config.project):
+                        raise RunPreflightError(
+                            "External RMSF requires exact source mapping identity"
+                        )
             if (
                 isinstance(rmsd, RMSD)
                 and rmsd.enabled
@@ -2084,4 +2099,599 @@ def validate_selected_qc_policy(choices: Any, policy: Any) -> None:
     if expected != policy:
         raise ValueError(
             "Bound QC policy conflicts with explicitly selected profile policy"
+        )
+
+
+class AtomicEligibilityError(RunPreflightError):
+    """A new method prerequisite is unavailable before numerical execution."""
+
+
+def _atomic_samples(execution: InputExecution, runtime: Any) -> tuple[Any, ...]:
+    from mania.preprocessing.trajectory_rmsf_io import Sample
+
+    physical = execution.values.get("sampling")
+    if physical is not None:
+        resolved = {s.requested_sample_index: s for s in physical.selected_samples}
+        ordered = sorted(
+            (*physical.selected_samples, *physical.missing_samples),
+            key=lambda s: s.requested_sample_index,
+        )
+        return tuple(
+            Sample(
+                requested_sample_index=s.requested_sample_index,
+                requested_time_ps=s.requested_time_ps,
+                state="observed" if s.requested_sample_index in resolved else "missing",
+                runtime_frame_index=resolved[
+                    s.requested_sample_index
+                ].source_frame_index
+                if s.requested_sample_index in resolved
+                else None,
+                source_frame_index=resolved[s.requested_sample_index].source_frame_index
+                if s.requested_sample_index in resolved
+                else None,
+                prepared_frame_index=resolved[
+                    s.requested_sample_index
+                ].source_frame_index
+                if s.requested_sample_index in resolved
+                and execution.system.pbc.mode == "prepared"
+                else None,
+                actual_time_ps=resolved[s.requested_sample_index].actual_time_ps
+                if s.requested_sample_index in resolved
+                else None,
+                time_delta_ps=resolved[s.requested_sample_index].actual_time_ps
+                - s.requested_time_ps
+                if s.requested_sample_index in resolved
+                else None,
+                reason=None
+                if s.requested_sample_index in resolved
+                else "requested_time_not_observed",
+            )
+            for s in ordered
+        )
+    selector = execution.system.frames
+    count = len(runtime.trajectory)
+    if selector.indexes is not None:
+        indexes = selector.indexes
+    else:
+        indexes = tuple(
+            range(selector.start, min(selector.stop or count, count), selector.stride)
+        )
+        if selector.max_frames is not None:
+            indexes = indexes[: selector.max_frames]
+    if not indexes or any(i >= count for i in indexes):
+        raise AtomicEligibilityError("No complete valid requested frame population")
+    samples = []
+    for ordinal, index in enumerate(indexes):
+        timestep = runtime.trajectory[index]
+        # Unlike the reader's fallback .time property, data['time'] is supplied
+        # by actual XTC/TRR headers or the existing NAMD authority transform.
+        time_ps = getattr(timestep, "data", {}).get("time")
+        samples.append(
+            Sample(
+                requested_sample_index=ordinal,
+                requested_time_ps=None,
+                state="observed",
+                runtime_frame_index=index,
+                source_frame_index=index,
+                prepared_frame_index=index
+                if execution.system.pbc.mode == "prepared"
+                else None,
+                actual_time_ps=None if time_ps is None else float(time_ps),
+                time_delta_ps=None,
+                reason=None,
+            )
+        )
+    return tuple(samples)
+
+
+def _atomic_group(
+    runtime: Any, selection: str, system: System
+) -> tuple[Any, tuple[Any, ...]]:
+    try:
+        group = runtime.select_atoms(selection)
+        # A source element attribute is mandatory; inferred MDAnalysis elements
+        # are not authority, even if their string happens to match the registry.
+        attribute = runtime._topology.elements
+        if attribute.is_guessed:
+            raise ValueError("Guessed topology elements are not source authority")
+        keys = atom_keys(group, system.engine)
+        from mania.preprocessing.trajectory_rmsd import _roster
+
+        _roster(keys, 1)
+        if len(group.residues) != len(
+            {
+                (a.chain_id, a.segment_id, a.resid, a.insertion_code, a.resname)
+                for a in keys
+            }
+        ):
+            raise ValueError("Aliased source residue identities")
+        return group, keys
+    except (AttributeError, ValueError) as exc:
+        raise AtomicEligibilityError(
+            f"Selection/source element identity unavailable: {selection}: {exc}"
+        ) from exc
+
+
+def _default_protein(runtime: Any, system: System) -> tuple[Any, tuple[Any, ...]]:
+    group, keys = _atomic_group(runtime, "protein", system)
+    if len({(a.chain_id, a.segment_id) for a in keys}) != 1:
+        raise AtomicEligibilityError(
+            "Default protein group is not unequivocal; supply explicit atom selections"
+        )
+    return group, keys
+
+
+def _atomic_authorities(
+    execution: InputExecution, *, reference: Any = None, legacy_root: Path | None = None
+) -> tuple[Any, ...]:
+    """Bind declared source roles without assuming a shared filesystem ancestor.
+
+    New locators are content/role addresses, never paths resolved under `/`.
+    The exact typed source roster is the only resolver. Legacy relative bindings
+    remain supported against their original known root, without changing any
+    historical AuthorityBinding consumer.
+    """
+    from mania.canonical_reference import AuthorityBinding
+    from mania.output_paths import require_input_file, safe_absolute
+    from mania.preprocessing.trajectory_rmsd_io import file_sha256
+
+    system = execution.system
+    paths = [
+        ("topology", system.topology),
+        *(("trajectory", path) for path in system.trajectories),
+    ]
+    if system.input_binding_path:
+        paths.append(("input_binding", system.input_binding_path))
+    if system.pbc.preparation_evidence_path:
+        paths.append(("preparation_evidence", system.pbc.preparation_evidence_path))
+    if system.namd_authority:
+        paths.extend(
+            (
+                ("namd_elements", system.namd_authority.elements_path),
+                ("namd_time", system.namd_authority.time_path),
+            )
+        )
+    if reference is not None and reference.kind == "external":
+        paths.extend(
+            (
+                ("rmsf_external_coordinates", reference.path),
+                ("rmsf_atom_mapping", reference.atom_mapping_path),
+            )
+        )
+    result = []
+    for ordinal, (role, source) in enumerate(paths):
+        path = require_input_file(safe_absolute(source))
+        digest = file_sha256(path)
+        locator = (
+            path.relative_to(legacy_root).as_posix()
+            if legacy_root is not None
+            else f"atomic_sources/{role}/{ordinal:04d}/{digest}/{path.name}"
+        )
+        result.append(
+            AuthorityBinding(
+                role=role,
+                path=locator,
+                sha256=digest,
+                source_identity=system.identity(execution.values["project"]),
+            )
+        )
+    return tuple(result)
+
+
+def resolve_atomic_method(
+    execution: InputExecution,
+    loaded: PreprocessingConditionLoadResult,
+    method: str,
+    options: Any,
+) -> dict[str, Any]:
+    """Establish prerequisite availability, separately from numerical execution."""
+    from mania.preprocessing.trajectory_rmsf import fit_coordinates, xyz_float64
+    from mania.preprocessing.trajectory_sasa_radii import radii_for
+
+    assert loaded.runtime is not None
+    runtime: Any = loaded.runtime.runtime_object
+    global_samples = _atomic_samples(execution, runtime)
+    samples = global_samples
+    global_ordinals = tuple(range(len(global_samples)))
+    if method == "sasa":
+        global_ordinals = tuple(range(0, len(global_samples), options.frame_stride))
+        samples = tuple(
+            global_samples[index].model_copy(update={"requested_sample_index": local})
+            for local, index in enumerate(global_ordinals)
+        )
+    observed = [s for s in samples if s.state == "observed"]
+    if len(observed) < (2 if method == "rmsf" else 1):
+        raise AtomicEligibilityError("Insufficient genuinely observed selected frames")
+    if method == "rmsf" and samples[0].state != "observed":
+        raise AtomicEligibilityError(
+            "First selected RMSF reference is missing; replacement is forbidden"
+        )
+    resolved: dict[str, Any] = {
+        "runtime": runtime,
+        "samples": samples,
+        "global_samples": global_samples,
+        "global_ordinals": global_ordinals,
+    }
+    if method == "rmsf":
+        fit, fit_keys = _atomic_group(runtime, options.fit_selection, execution.system)
+        evaluation, evaluation_keys = _atomic_group(
+            runtime, options.atom_selection, execution.system
+        )
+        for selection, keys in (
+            (options.fit_selection, fit_keys),
+            (options.atom_selection, evaluation_keys),
+        ):
+            if selection == "protein and name CA":
+                _, protein = _default_protein(runtime, execution.system)
+                residues = {
+                    (a.chain_id, a.segment_id, a.resid, a.insertion_code, a.resname)
+                    for a in protein
+                }
+                chosen = [
+                    (a.chain_id, a.segment_id, a.resid, a.insertion_code, a.resname)
+                    for a in keys
+                ]
+                if (
+                    len(chosen) != len(set(chosen))
+                    or set(chosen) != residues
+                    or any(a.atom_name != "CA" or a.element != "C" for a in keys)
+                ):
+                    raise AtomicEligibilityError(
+                        "Default C-alpha requires exactly one source-proven "
+                        "protein CA per residue"
+                    )
+        runtime.trajectory[observed[0].runtime_frame_index]
+        try:
+            fit_coordinates(fit.positions, len(fit_keys))
+            xyz_float64(evaluation.positions, len(evaluation_keys))
+        except (ValueError, FloatingPointError) as exc:
+            raise AtomicEligibilityError(
+                f"RMSF initial fit/evaluation prerequisite: {exc}"
+            ) from exc
+        resolved.update(
+            fit=fit,
+            evaluation=evaluation,
+            fit_keys=fit_keys,
+            evaluation_keys=evaluation_keys,
+            external=None,
+        )
+        if options.reference.kind == "external":
+            from mania.result_readers import read_external_inputs
+
+            external = read_external_inputs(execution.system, options, verify=True)
+            coordinates, pairing = external
+            if (
+                pairing.identity
+                != execution.system.identity(execution.values["project"])
+                or tuple(p.source for p in pairing.fit_pairs) != fit_keys
+                or tuple(p.source for p in pairing.evaluation_pairs) != evaluation_keys
+            ):
+                raise AtomicEligibilityError(
+                    "External RMSF mapping must exactly cover ordered actual selections"
+                )
+            values = {a.atom: a.xyz_A for a in coordinates.atoms}
+            reference_fit = [values[p.reference] for p in pairing.fit_pairs]
+            try:
+                fit_coordinates(reference_fit, len(fit_keys))
+            except (ValueError, FloatingPointError) as exc:
+                raise AtomicEligibilityError(
+                    f"Invalid external RMSF fit geometry: {exc}"
+                ) from exc
+            resolved.update(external=external, reference_fit=reference_fit)
+    else:
+        if options.target_selection == "protein":
+            target, target_keys = _default_protein(runtime, execution.system)
+        else:
+            target, target_keys = _atomic_group(
+                runtime, options.target_selection, execution.system
+            )
+        environment: Any = None
+        environment_keys: tuple[Any, ...] = ()
+        if "with_environment" in options.variants:
+            environment, environment_keys = _atomic_group(
+                runtime, options.environment_selection, execution.system
+            )
+            if {a.atom_index for a in target_keys} & {
+                a.atom_index for a in environment_keys
+            }:
+                raise AtomicEligibilityError(
+                    "SASA target/environment selections overlap"
+                )
+        if not options.include_hydrogens:
+            target = target[[i for i, a in enumerate(target_keys) if a.element != "H"]]
+            target_keys = tuple(a for a in target_keys if a.element != "H")
+            if environment is not None:
+                environment = environment[
+                    [i for i, a in enumerate(environment_keys) if a.element != "H"]
+                ]
+                environment_keys = tuple(
+                    a for a in environment_keys if a.element != "H"
+                )
+        try:
+            radii_for(tuple(a.element for a in target_keys))
+            if environment is not None:
+                radii_for(tuple(a.element for a in environment_keys))
+            runtime.trajectory[observed[0].runtime_frame_index]
+            xyz_float64(target.positions, len(target_keys))
+            if environment is not None:
+                xyz_float64(environment.positions, len(environment_keys))
+            np = importlib.import_module("numpy")
+
+            from mania.preprocessing.trajectory_sasa import validate_centers
+
+            validate_centers(
+                target.positions,
+                environment.positions if environment is not None else np.empty((0, 3)),
+            )
+        except (ValueError, FloatingPointError) as exc:
+            raise AtomicEligibilityError(
+                f"SASA selected source/radius/coordinate prerequisite: {exc}"
+            ) from exc
+        resolved.update(
+            target=target,
+            target_keys=target_keys,
+            environment=environment,
+            environment_keys=environment_keys,
+        )
+    # I/O/source errors here remain failures, never optional missing-input skips.
+    resolved["authority"] = _atomic_authorities(execution)
+    return resolved
+
+
+def _atomic_context(execution: InputExecution, resolved: dict[str, Any]) -> Any:
+    from mania.preprocessing.trajectory_rmsf_io import MeasurementContext
+
+    return MeasurementContext(
+        identity=execution.system.identity(execution.values["project"]),
+        mode=execution.values["mode"],
+        pbc=execution.system.pbc,
+        sampling_kind="physical" if execution.system.physical_time else "frame",
+        source_frame_count=len(resolved["runtime"].trajectory),
+        authority=resolved["authority"],
+        samples=resolved["samples"],
+        pbc_status="PBC_UNVERIFIED"
+        if execution.system.pbc.mode == "unverified"
+        else None,
+    )
+
+
+def _verify_atomic_sources(
+    execution: InputExecution,
+    authorities: tuple[Any, ...],
+    *,
+    reference: Any = None,
+    legacy_root: Path | None = None,
+) -> None:
+    expected = _atomic_authorities(
+        execution, reference=reference, legacy_root=legacy_root
+    )
+    if authorities != expected:
+        raise ValueError("Atomic declared source roles/paths/identity/digests differ")
+    if legacy_root is not None:
+        for authority in authorities:
+            verify_authority(
+                legacy_root,
+                authority,
+                execution.system.identity(execution.values["project"]),
+            )
+
+
+def execute_rmsf(
+    execution: InputExecution, resolved: dict[str, Any], options: Any, directory: Path
+) -> None:
+    from mania.preprocessing.trajectory_rmsf import RMSFAccumulator
+    from mania.preprocessing.trajectory_rmsf_io import (
+        AtomStatistics,
+        RMSFMeasurement,
+        roster_digest,
+        write_rmsf_measurement,
+    )
+
+    authority = resolved["authority"]
+    reference_source = None
+    if resolved["external"] is not None:
+        complete = _atomic_authorities(execution, reference=options.reference)
+        extra = complete[len(authority) :]
+        authority = (*authority, *extra)
+        resolved["authority"] = authority
+        reference_source = extra[0]
+    accumulator = RMSFAccumulator(
+        resolved["fit_keys"],
+        resolved["evaluation_keys"],
+        reference_fit=resolved.get("reference_fit"),
+    )
+    for sample in resolved["samples"]:
+        if sample.state != "observed":
+            continue
+        resolved["runtime"].trajectory[sample.runtime_frame_index]
+        accumulator.add(
+            resolved["fit"].positions,
+            resolved["evaluation"].positions,
+            source_frame_index=sample.source_frame_index,
+            fit_atoms=atom_keys(resolved["fit"], execution.system.engine),
+            evaluation_atoms=atom_keys(resolved["evaluation"], execution.system.engine),
+        )
+    accumulator.values()  # Enforce N and finite numerical completion before publishing.
+    assert accumulator.reference is not None
+    final_reference_source = (
+        reference_source
+        if reference_source is not None
+        else accumulator.reference_source
+    )
+    if final_reference_source is None:
+        raise ValueError("RMSF alignment reference source is unavailable")
+    _verify_atomic_sources(execution, authority, reference=options.reference)
+    if resolved["external"] is not None:
+        from mania.result_readers import read_external_inputs
+
+        if (
+            read_external_inputs(execution.system, options, verify=True)
+            != resolved["external"]
+        ):
+            raise ValueError(
+                "External RMSF authority changed during numerical execution"
+            )
+        for role, path in (
+            ("rmsf_external_coordinates", options.reference.path),
+            ("rmsf_atom_mapping", options.reference.atom_mapping_path),
+        ):
+            target = directory / (role + ".json")
+            target.write_bytes(path.read_bytes())
+            execution.artifacts.append(
+                (
+                    role,
+                    target,
+                    "mania.rmsd_external_coordinates.v1"
+                    if role == "rmsf_external_coordinates"
+                    else "mania.rmsd_atom_mapping.v1",
+                )
+            )
+    measurement = RMSFMeasurement(
+        context=_atomic_context(execution, resolved),
+        options=options,
+        fit_atoms=resolved["fit_keys"],
+        evaluation_atoms=resolved["evaluation_keys"],
+        fit_identity_sha256=roster_digest(resolved["fit_keys"]),
+        evaluation_identity_sha256=roster_digest(resolved["evaluation_keys"]),
+        reference_kind=options.reference.kind,
+        reference_source=final_reference_source,
+        reference_coordinate_sha256=accumulator.reference_sha256,
+        reference_fit_A=tuple(
+            (float(row[0]), float(row[1]), float(row[2]))
+            for row in accumulator.reference
+        ),
+        observed_frame_count=accumulator.count,
+        atoms=tuple(
+            AtomStatistics(
+                atom=atom,
+                mean_A=(float(mean[0]), float(mean[1]), float(mean[2])),
+                m2_A2=(float(m2[0]), float(m2[1]), float(m2[2])),
+            )
+            for atom, mean, m2 in zip(
+                resolved["evaluation_keys"],
+                accumulator.mean,
+                accumulator.m2,
+                strict=True,
+            )
+        ),
+    )
+    execution.values["rmsf"] = write_rmsf_measurement(measurement, directory)
+    for name in ("rmsf_atoms", "rmsf_samples", "rmsf_measurement"):
+        execution.artifacts.append(
+            (
+                name,
+                directory
+                / (name + (".json" if name.endswith("measurement") else ".csv")),
+                "mania.rmsf_measurement.v1" if name.endswith("measurement") else None,
+            )
+        )
+    if not execution.observed_frames:
+        execution.observed_frames.extend(
+            (s.source_frame_index, s.actual_time_ps)
+            for s in resolved["samples"]
+            if s.state == "observed"
+        )
+
+
+def execute_sasa(
+    execution: InputExecution, resolved: dict[str, Any], options: Any, directory: Path
+) -> None:
+    from mania.preprocessing.trajectory_rmsf_io import roster_digest
+    from mania.preprocessing.trajectory_sasa import accessibility_counts, grid_sha256
+    from mania.preprocessing.trajectory_sasa_io import (
+        CSV_FILES,
+        SASAMeasurement,
+        SASASampling,
+        SurfaceCounts,
+        write_sasa_measurement,
+    )
+    from mania.preprocessing.trajectory_sasa_radii import (
+        RADII,
+        REGISTRY_SHA256,
+        registry_record,
+    )
+
+    rows: dict[str, list[SurfaceCounts]] = {v: [] for v in options.variants}
+    for sample in resolved["samples"]:
+        counts = None
+        if sample.state == "observed":
+            resolved["runtime"].trajectory[sample.runtime_frame_index]
+            if atom_keys(resolved["target"], execution.system.engine) != resolved[
+                "target_keys"
+            ] or (
+                resolved["environment"] is not None
+                and atom_keys(resolved["environment"], execution.system.engine)
+                != resolved["environment_keys"]
+            ):
+                raise ValueError("SASA ordered atom source correspondence changed")
+            counts = accessibility_counts(
+                resolved["target"].positions,
+                tuple(a.element for a in resolved["target_keys"]),
+                environment=resolved["environment"].positions
+                if resolved["environment"] is not None
+                else None,
+                environment_elements=tuple(
+                    a.element for a in resolved["environment_keys"]
+                ),
+                probe_radius_A=options.probe_radius_A,
+                variants=options.variants,
+            )
+        for variant in options.variants:
+            rows[variant].append(
+                SurfaceCounts(
+                    variant=variant,
+                    requested_sample_index=sample.requested_sample_index,
+                    accessible_points=None if counts is None else counts[variant],
+                )
+            )
+    _verify_atomic_sources(execution, resolved["authority"])
+    elements = {
+        a.element for a in (*resolved["target_keys"], *resolved["environment_keys"])
+    }
+    measurement = SASAMeasurement(
+        context=_atomic_context(execution, resolved),
+        options=options,
+        sampling=SASASampling(
+            global_samples=resolved["global_samples"],
+            selected_global_ordinals=resolved["global_ordinals"],
+            global_requested_count=len(resolved["global_samples"]),
+            requested_count=len(resolved["samples"]),
+            observed_count=sum(s.state == "observed" for s in resolved["samples"]),
+            processed_count=sum(s.state == "observed" for s in resolved["samples"]),
+            missing_count=sum(s.state == "missing" for s in resolved["samples"]),
+            invalid_count=sum(s.state == "invalid" for s in resolved["samples"]),
+            failed_count=0,
+            unavailable_time_reason="source_time_unavailable"
+            if any(
+                s.state == "observed" and s.actual_time_ps is None
+                for s in resolved["samples"]
+            )
+            else None,
+        ),
+        target_atoms=resolved["target_keys"],
+        environment_atoms=resolved["environment_keys"],
+        target_identity_sha256=roster_digest(resolved["target_keys"]),
+        environment_identity_sha256=roster_digest(resolved["environment_keys"]),
+        radius_registry=registry_record(),
+        radius_registry_sha256=REGISTRY_SHA256,
+        used_radii_A={e: RADII[e] for e in sorted(elements)},
+        grid_sha256=grid_sha256(),
+        counts=tuple(row for variant in options.variants for row in rows[variant]),
+    )
+    execution.values["sasa"] = write_sasa_measurement(measurement, directory)
+    execution.artifacts.extend(
+        (Path(name).stem, directory / name, None) for name in CSV_FILES
+    )
+    execution.artifacts.append(
+        (
+            "sasa_measurement",
+            directory / "sasa_measurement.json",
+            "mania.sasa_measurement.v1",
+        )
+    )
+    if not execution.observed_frames:
+        execution.observed_frames.extend(
+            (s.source_frame_index, s.actual_time_ps)
+            for s in resolved["global_samples"]
+            if s.state == "observed"
         )

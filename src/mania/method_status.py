@@ -11,6 +11,8 @@ from mania.run_config import (
     PCA,
     QC,
     RMSD,
+    RMSF,
+    SASA,
     Clustering,
     Contacts,
     Digest,
@@ -30,6 +32,8 @@ MethodID = Literal[
     "region_enrichment",
     "rg",
     "rmsd",
+    "rmsf",
+    "sasa",
     "typed_interactions",
     "temporal_rin",
     "fingerprints",
@@ -84,6 +88,8 @@ EffectiveOptions = (
     | RegionEnrichment
     | Rg
     | RMSD
+    | RMSF
+    | SASA
     | TemporalRin
     | PCA
     | Clustering
@@ -117,6 +123,8 @@ class MethodStatus(RunModel):
                     "region_enrichment": RegionEnrichment,
                     "rg": RgEffectiveParameters if "eligibility" in option else Rg,
                     "rmsd": RMSD,
+                    "rmsf": RMSF,
+                    "sasa": SASA,
                     "temporal_rin": TemporalRin,
                     "pca": PCA,
                     "clustering": Clustering,

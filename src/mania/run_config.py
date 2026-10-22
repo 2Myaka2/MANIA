@@ -265,6 +265,58 @@ class QC(Method):
         return self
 
 
+class RMSF(Method):
+    atom_selection: Text = "protein and name CA"
+    fit_selection: Text = "protein and name CA"
+    reference: RMSDReference = Field(
+        default_factory=lambda: RMSDReference(kind="first_selected")
+    )
+
+
+def _probe_real(value: object) -> object:
+    if type(value) not in (int, float):
+        raise ValueError("Probe requires a finite real, never bool")
+    return value
+
+
+def _rationale(value: object) -> object:
+    if value is not None and (type(value) is not str or not value.strip()):
+        raise ValueError("Environment rationale must contain non-whitespace text")
+    return value
+
+
+class SASA(Method):
+    frame_stride: Annotated[int, Field(gt=0, strict=True)] = 1
+    target_selection: Text = "protein"
+    variants: Annotated[
+        tuple[Literal["isolated", "with_environment"], ...], BeforeValidator(_ordered)
+    ] = ("isolated",)
+    environment_selection: Text | None = None
+    environment_rationale: Annotated[str | None, BeforeValidator(_rationale)] = None
+    probe_radius_A: Annotated[
+        float, BeforeValidator(_probe_real), Field(ge=0.5, le=3.0, allow_inf_nan=False)
+    ] = 1.4
+    include_hydrogens: bool = False
+
+    @model_validator(mode="after")
+    def _environment(self) -> Self:
+        if not self.variants or len(set(self.variants)) != len(self.variants):
+            raise ValueError("SASA requires nonempty unique variants")
+        if (
+            self.enabled
+            and "with_environment" in self.variants
+            and (
+                self.environment_selection is None or self.environment_rationale is None
+            )
+        ):
+            raise ValueError(
+                "with_environment requires explicit selection "
+                "and environment_rationale; "
+                "selected ions require an explanation of their inclusion"
+            )
+        return self
+
+
 class Methods(RunModel):
     @model_validator(mode="before")
     @classmethod
@@ -283,6 +335,8 @@ class Methods(RunModel):
     region_enrichment: RegionEnrichment | None = None
     rg: Rg | None = None
     rmsd: RMSD | None = None
+    rmsf: RMSF | None = None
+    sasa: SASA | None = None
     typed_interactions: Method | None = None
     temporal_rin: TemporalRin | None = None
     fingerprints: Method | None = None
@@ -503,6 +557,8 @@ def merge_methods(config: RunConfig, system: System) -> dict[str, Method]:
         result.update(contacts=Contacts(), static_rin=Method())
     if config.mode == "full":
         result.update(
+            rmsf=RMSF(),
+            sasa=SASA(),
             communities=Method(),
             typed_interactions=Method(),
             temporal_rin=TemporalRin(),

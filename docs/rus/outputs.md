@@ -210,6 +210,79 @@ Exploratory создаёт только `profiles/p0001/preview/tables/` (17 п�
 readers отвергают preview. Нет официального `release/dataset_manifest.json`,
 release provenance или публикационной печати. См. [Расширения](extensions.md#preview).
 
+<a id="rmsf-sasa"></a>
+## Семейства артефактов RMSF и SASA в этом снимке
+
+Файлы находятся в `systems/sNNNN/tNNNN/preprocessing/` только для завершённых
+выбранных методов. Артефакты опубликованной 0.2.0 читаются без изменений.
+Имена необязательных legacy-колонок сохранены и не используются вместо этих измерений.
+
+| Файл | Содержимое |
+| --- | --- |
+| `rmsf_atoms.csv` | Упорядоченные исходные ключи атомов, `rmsf_A`, `observed_frame_count` |
+| `rmsf_samples.csv` | Полный запрошенный roster: requested sample/time, observed/missing state, runtime/source/prepared index, actual time/delta, reason |
+| `rmsf_measurement.json` | `mania.rmsf_measurement.v1`: контекст, опции, исходные rosters/hashes, фактический reference и fit coordinates/hash, N, means/M2, точность/proper rotation/равные веса/делитель N, CSV digests |
+| `rmsf_external_coordinates.json`, `rmsf_atom_mapping.json` | Только внешний reference: точные сохранённые входные документы, без выдуманного соответствия |
+| `sasa_atom_frames.csv`, `sasa_residue_frames.csv`, `sasa_total_frames.csv` | Вариант и полная sample identity; выбранные target-атомы/остатки; `sasa_A2`; в атомных строках также `accessible_points` |
+| `sasa_atom_means.csv`, `sasa_residue_means.csv`, `sasa_total_means.csv` | Вариант, target identity при наличии, наблюдённое N, `mean_sasa_A2` |
+| `sasa_measurement.json` | `mania.sasa_measurement.v1`: контекст, точные опции/обоснование, target/environment rosters/hashes, реестр Bondi/hash/DOI, использованные радиусы, probe, grid ID/count/hash, точность, строгое occlusion, целые counts и CSV digests |
+
+CSV — UTF-8 с LF и фиксированным порядком заголовков; null — пустое поле,
+валидный ноль — `0`. Float64 записывается с 17 значащими цифрами. JSON закрыт
+и версионирован. Source atom keys сохраняют engine, индекс/имя атома, chain,
+segment, residue/insertion/name, element и altloc; для остатков используется полный
+residue key. Means включают только наблюдённые кадры. Поверхность окружения
+и усреднённый по остаткам RMSF не экспортируются.
+
+Чтение заново строит CSV из закрытого измерения, проверяет identity, role, schema,
+популяции, точный порядок samples, reference/authority hashes, N, counts,
+means/sums, options и grid/radius registry. Одна смена digest не делает испорченное
+семейство валидным. Qualification strict/Exploratory и original/prepared lineage
+остаются явными. Обоснование сохраняется в measurement options и provenance
+parameters как заявление владельца, а не сертификат. Выходы не устанавливают
+пригодность PBC, биологию или готовность публикации. См. [настройки](configuration.md#rmsf-sasa)
+и [формулы](science.md#rmsf-sasa).
+
+
+<a id="sasa-frame-stride"></a>
+## Добавленные SASA sampling и привязки атомных источников
+
+Этот снимок сохраняет `mania.sasa_measurement.v1` с дополнительным
+`sampling`: полные `global_samples`, `selected_global_ordinals`,
+`global_requested_count`, `requested_count`, `observed_count`, `processed_count`,
+`missing_count`, `invalid_count`, `failed_count`, `unavailable_time_reason`.
+В завершённом измерении processed=observed>0, failed_count=0. Ошибка сохраняется
+в run/method status; выдуманный ноль/mean не запечатывается.
+
+`context.samples[].requested_sample_index` — непрерывный **локальный SASA** ordinal.
+`selected_global_ordinals[local]` указывает общий запрос, сохраняя его source/
+prepared indices, actual time, state и reason. Новые SASA frame CSV добавляют
+`global_requested_sample_index` и `actual_time_reason`; остальные поля/единицы
+и все не-SASA CSV неизменны. Прежний `observed_frame_count` в means — N реально
+обработанных SASA кадров, не общие M/запрошенные K.
+
+`mania artifacts validate` восстанавливает G по effective global request и
+настоящим source/header metadata прежним optional MD loader без научного kernel.
+Проверяются global/local/source/prepared/time correspondence, популяции обоих
+вариантов, counts, null/zero и means даже после пересчёта обычных hashes.
+Проверка source lineage новых SASA-артефактов требует optional MD runtime и доступа
+к объявленным входам. Старые v1 SASA первого кандидата без новых полей читаются
+только по ограниченному исходному stride1/full-population контракту; свидетельства
+не переписываются и не переименовываются скрытно.
+
+Новые authority paths RMSF/SASA — переносимые role/content locators
+`atomic_sources/<role>/<ordinal>/<sha256>/<basename>`. Это не пути для разрешения
+от `/` либо папки YAML. Resolver строит их только по точному типизированному
+roster effective config и проверяет canonical regular files, source identity
+и настоящий digest. Topology, упорядоченные trajectories, binding/preparation,
+NAMD element/time controls, явные RMSF reference/mapping имеют отдельные роли.
+Старые относительные authority records используют прежние строгие правила.
+Другие authority consumers и InputBinding не меняются. Проверки подтверждают
+техническую lineage, а не PBC/биологию/научную приёмку.
+
+
 ---
 
 [Все руководства](README.md) · [English](../eng/outputs.md)
+
+Новые измерения SASA используют `mania.sasa.fibonacci3840.v1`, 3840 точек и SHA256 сетки `bd52bac9426729dcd0fff5445562eefe3745ea4cb8be70e04b80124ca31871f0`. Читатель неизменённой схемы `mania.sasa_measurement.v1` также принимает подлинные исторические измерения `mania.sasa.fibonacci960.v1` только с 960 точками и SHA256 `89662d78956cad341fdeddaddc793c36e5971c733fe9e832e6442a81399132dd`. Разрешены только эти точные сочетания идентификатора, числа точек и хеша; границы счётчиков и делитель площади соответствуют проверенной сетке. Только исторические артефакты 960 могут не содержать исходные поля sampling. YAML-настройки числа точек нет. Исторические результаты и FAIL при 960 сохраняют исходную интерпретацию; более плотная сетка не означает независимой научной приёмки.

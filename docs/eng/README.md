@@ -2,7 +2,13 @@
 
 MANIA turns an explicit molecular-analysis request into scientific CSV/JSON,
 method statuses and provenance. Core is usable independently; coordinate reading
-requires the optional MD runtime. This guide describes **MANIA 0.2.0**.
+requires the optional MD runtime. This guide describes the **public source
+snapshot**, including RMSF/SASA: [settings and usage](configuration.md#rmsf-sasa),
+[definitions](science.md#rmsf-sasa) and [outputs](outputs.md#rmsf-sasa).
+Package metadata remains **0.2.0**. This source-branch update is not a new numbered
+software release; record the public Git commit because the version alone cannot
+distinguish this code from the initial public snapshot. Technical verification
+does not establish scientific qualification for an intended input or use.
 
 Start with [Quickstart](quickstart.md), then [Modes](modes.md),
 [Configuration](configuration.md) and [Outputs](outputs.md). Consult
@@ -47,6 +53,11 @@ flowchart LR
 > scientific qualification, approved biology or publication readiness.
 
 [Language gateway](../README.md) · [Repository overview](../../README.md)
+
+This source snapshot includes approved [SASA frame_stride](configuration.md#sasa-frame-stride)
+and B-01 source-path compatibility. Historical numbered artifacts remain unchanged;
+source publication and scientific qualification are separate.
+
 
 ---
 

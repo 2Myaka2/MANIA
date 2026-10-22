@@ -687,7 +687,10 @@ Neither is required by Core. Exploratory always retains
 plus `PBC_UNVERIFIED` for actual unverified lineage. It cannot provide scientifically
 qualified authoritative FAIR release inputs.
 
-**Not implemented:** RMSF, SASA, secondary-structure computation, internal PBC
+This public source snapshot computes **RMSF and SASA**, described
+[below](#rmsf-sasa). Package metadata remains 0.2.0; this is not a new numbered release.
+
+**Not implemented:** secondary-structure computation, internal PBC
 preparation, a future scientific-constants file and automatic sensitivity sweeps.
 Synthetic/constructed tests establish technical behavior only. Real-input
 scientific qualification is incomplete. See [Reproducibility](reproducibility.md)
@@ -696,6 +699,87 @@ and [Extensions](extensions.md) before any scientific handoff.
 Implementation: [handoff](../../src/mania/handoff.py),
 [provenance](../../src/mania/run_provenance.py),
 [notebook conversion](../../src/mania/adapters/notebook_export.py).
+
+<a id="rmsf-sasa"></a>
+## RMSF and SASA in this source snapshot definitions
+
+### RMSF: Calculation settings and modes
+
+See [typed selections and modes](configuration.md#rmsf-sasa). A single proper
+Kabsch rotation/translation is derived from the fit group for every frame and
+applied to the evaluation group. Centered fit coordinates require rank ≥2 using
+`s2 > max(n_fit,3) * eps_float64 * s_max`. Reflection is forbidden. Each evaluation
+atom uses equal-weight float64 Welford accumulation:
+`RMSF_i = sqrt(sum_xyz(M2_i) / N)` in Å, with observed `N >= 2`, not `N-1`.
+Default fit/evaluation is source-proven protein CA, one CA per residue. Other
+explicit selections remain per atom. A valid zero is retained. A missing physical
+sample has null actual fields and a reason; it contributes neither zero nor weight
+to N. An invalid first requested reference fails; no later frame replaces it.
+External references use exact retained coordinate/mapping authority and hashes.
+Permuting frames with a fixed reference tests accumulation; changing the first
+frame changes the reference and need not preserve RMSF.
+
+### SASA: Calculation settings and modes
+
+See [probe, selections, hydrogen and environment settings](configuration.md#rmsf-sasa).
+For target atom i, `R_i = radius(element_i) + probe_radius_A` and
+`SASA_i = accessible_count_i / 3840 * 4*pi*R_i^2` in Å². Fixed float64 global
+Fibonacci points use k=0..3839, `z=1-2*(k+0.5)/3840`,
+`theta=k*pi*(3-sqrt(5))`, `x=sqrt(max(0,1-z*z))*cos(theta)`,
+`y=sqrt(max(0,1-z*z))*sin(theta)`. A point is occluded only when its squared
+distance to another selected center is strictly less than that atom's inflated
+radius squared; no distance epsilon is added. Exact neighbor pruning changes no
+point or inequality. Grid orientation is fixed, so finite-grid rotational aliasing
+is possible; translation preserves the geometry. Coincident selected centers and
+nonfinite geometry are rejected, without an invented near-distance tolerance.
+
+| Element | H | C | N | O | P | S | Na | Cl |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Bondi radius, Å | 1.20 | 1.70 | 1.55 | 1.52 | 1.80 | 1.80 | 2.27 | 1.75 |
+
+Only these eight literal, case-sensitive element symbols are supported. There is
+no element inference, alias, heavy-atom fallback or replacement library. The
+registry `mania.sasa.bondi8.v1` records its immutable content hash and source DOIs.
+H uses Bondi 1.20 Å; the distinct Rowland–Taylor 1.10 Å value is not substituted.
+Primary references: [Bondi 1964](https://doi.org/10.1021/j100785a001),
+[Mantina et al. 2009](https://doi.org/10.1021/jp8111556),
+[Rowland–Taylor 1996](https://doi.org/10.1021/jp953141+).
+
+`isolated` measures target surface occluded by the target itself.
+`with_environment` adds only the explicit disjoint environment as occluders;
+reported surface remains target-only. Per atom, adding an environment cannot
+increase accessible counts or area. H is excluded from both populations by
+default; inclusion requires explicit source H. No water, ion, membrane or protein
+membership is inferred. The owner's rationale must explain selected ions and is
+retained without being treated as scientific validation. At least one observed
+frame is required. Residues and totals are sums over the same selected target
+atoms; means first average each atom over observed frames, then sum. Missing
+samples have null areas, never synthetic zero. A fully buried atom may validly
+have zero area. Environment atoms never acquire target-surface rows.
+
+Approved synthetic comparisons use sphere absolute tolerance 1e-8 Å²; overlap
+`max(2% of reference,0.5 Å²)`; protein total 2%; and residue
+`max(5% of reference,2 Å²)`. RMSF analytical and rigid-invariance absolute
+threshold is 1e-8 Å; independent comparison uses atol=1e-8 Å and rtol=1e-7.
+These technical thresholds do not establish real-system scientific validity.
+No PBC preparation is performed; raw/prepared evidence does not itself establish
+physical co-locality, biology, authoritative release eligibility or publication
+readiness. Independent technical acceptance and owner-run real calculations
+remain separate requirements.
+
+
+## SASA sparse population in this source snapshot
+
+The approved SASA-only `frame_stride` selects positions 0,s,2s from the global
+requested sequence before missing filtering. It changes the measurement population,
+not the 3840-point algorithm, radii, probe, H policy, strict occlusion or numerical
+thresholds. Both variants share that population. With M=50, stride10 gives K=5;
+one selected missing gives N=4. Atom means divide by N=4, then residue/target means
+sum those atom means. A measured zero contributes weight; missing contributes none.
+RMSF's reference, N and all other method populations remain unchanged. Sparse
+means do not establish full-time coverage or physical co-locality. See
+[settings and source-index example](configuration.md#sasa-frame-stride).
+
 
 ---
 

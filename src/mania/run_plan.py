@@ -140,6 +140,17 @@ REPLICA_FILENAMES = {
 }
 GROUP_METHODS = {"comparison", "replica_aggregation", "profile_outputs"}
 DEFAULT_SOURCES = {
+    "rmsf": (
+        "Core RMSF: float64 proper Kabsch, first_selected alignment, atomic mean, "
+        "divisor N; Full adds this applicable preset after historical 0.2.0"
+    ),
+    "sasa": (
+        "Core SASA: Bondi8 H1.20 C1.70 N1.55 O1.52 P1.80 S1.80 Na2.27 Cl1.75 A; "
+        "DOIs 10.1021/j100785a001,10.1021/jp8111556,10.1021/jp953141+; "
+        "3840 fixed Fibonacci points; frame_stride selects global requested positions "
+        "0,s,2s before missing filtering, independently of all other methods; "
+        "Full adds applicable isolated SASA after 0.2.0"
+    ),
     "contacts": (
         "trajectory_contacts.PreprocessingContactDetectionOptions; run preset protein"
     ),
@@ -480,6 +491,24 @@ def _build_run_plan(config: RunConfig) -> RunPlan:
             ),
         )
     )
+    unverified += tuple(
+        UnverifiedCondition(
+            property=method + "_eligibility",
+            input_identity=s.identity(config.project),
+            reason=(
+                "Actual ordered selections, sourced elements/frames "
+                "and geometry require runtime preflight"
+            ),
+        )
+        for s in config.systems
+        for method in ("rmsf", "sasa")
+        if any(
+            x.method_id == method
+            and x.identity == s.identity(config.project)
+            and x.status == "planned"
+            for x in statuses
+        )
+    )
     if config.mode == "exploratory":
         unverified += tuple(
             UnverifiedCondition(
@@ -573,6 +602,33 @@ def _expected_artifacts(
         )
     ]
     families = {
+        "rmsf": (
+            ("rmsf_atoms", "preprocessing/rmsf_atoms.csv", None),
+            ("rmsf_samples", "preprocessing/rmsf_samples.csv", None),
+            (
+                "rmsf_measurement",
+                "preprocessing/rmsf_measurement.json",
+                "mania.rmsf_measurement.v1",
+            ),
+        ),
+        "sasa": (
+            *(
+                ("sasa_" + name, "preprocessing/sasa_" + name + ".csv", None)
+                for name in (
+                    "atom_frames",
+                    "residue_frames",
+                    "total_frames",
+                    "atom_means",
+                    "residue_means",
+                    "total_means",
+                )
+            ),
+            (
+                "sasa_measurement",
+                "preprocessing/sasa_measurement.json",
+                "mania.sasa_measurement.v1",
+            ),
+        ),
         "contacts": (
             ("contact_edges", "preprocessing/contact_edges.csv", None),
             ("protein_contact_edges", "preprocessing/protein_contact_edges.csv", None),
@@ -728,6 +784,24 @@ def _expected_artifacts(
                         producer_method=producer,
                     )
                 )
+
+        rmsf = merge_methods(config, system).get("rmsf")
+        if (
+            "rmsf" in planned
+            and getattr(getattr(rmsf, "reference", None), "kind", None) == "external"
+        ):
+            add(
+                "rmsf_external_coordinates",
+                "rmsf_external_coordinates.json",
+                "mania.rmsd_external_coordinates.v1",
+                "rmsf",
+            )
+            add(
+                "rmsf_atom_mapping",
+                "rmsf_atom_mapping.json",
+                "mania.rmsd_atom_mapping.v1",
+                "rmsf",
+            )
 
         if "physical_windows" in planned:
             from mania.preprocessing.perframe_observations import (

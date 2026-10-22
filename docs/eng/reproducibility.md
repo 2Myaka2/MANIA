@@ -114,9 +114,13 @@ separately authorized actual inputs, coordinate/time/selection/source authority,
 compatible runtime and scientific comparison/reviewer evidence. No tutorial,
 configuration of remote CI or historical receipt substitutes for those checks.
 Record actual failures and classify unavailable checks as NOT RUN/BLOCKED, never
-PASS. Unsupported future RMSF/SASA/secondary structure, internal PBC preparation,
-scientific-constants files and automatic sensitivity analysis remain outside the
-implemented capability set.
+PASS. This public source snapshot computes RMSF/SASA; see
+[settings](configuration.md#rmsf-sasa) and [definitions](science.md#rmsf-sasa).
+Package metadata remains 0.2.0; record the public Git commit for reproducibility.
+Source publication and technical verification do not establish scientific
+qualification for each intended real input and use. Secondary structure, internal PBC
+preparation, scientific-constants files and automatic sensitivity analysis remain
+outside the implemented capability set.
 
 [Scientific definitions](science.md) · [Output interpretation](outputs.md)
 

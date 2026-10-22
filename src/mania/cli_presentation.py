@@ -158,6 +158,16 @@ def _method_line(method: Any) -> str:
             values.append(f"cutoff {value} angstrom")
         elif key != "distance_unit":
             values.append(f"{key}={text(value)}")
+    if method.method_id == "rmsf" and "reference" in options:
+        import json
+
+        values.append(
+            "reference=" + text(json.dumps(options["reference"], sort_keys=True))
+        )
+    if method.method_id == "sasa" and "variants" in options:
+        values.append("variants=" + text(",".join(options["variants"])))
+    if method.method_id in ("rmsf", "sasa"):
+        values.append(text(method.message))
     details = "; ".join(values)
     state = method.status
     origin = " (dependency)" if method.request_origin == "dependency" else ""

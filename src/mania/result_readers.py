@@ -34,6 +34,20 @@ class ValidatedRun:
     artifact_count: int
 
 
+def _sasa_status_defaults(payload: Any) -> Any:
+    """Only the approved default-1 addition is optional in old typed SASA rows."""
+    import copy
+
+    result = copy.deepcopy(payload)
+    if isinstance(result, dict) and isinstance(result.get("methods"), list):
+        for row in result["methods"]:
+            if isinstance(row, dict) and row.get("method_id") == "sasa":
+                options = row.get("effective_parameters")
+                if isinstance(options, dict) and set(options) != {"enabled"}:
+                    options.setdefault("frame_stride", 1)
+    return result
+
+
 def read_run_summary(root: str | Path) -> RunSummary | ExploratoryRunSummary:
     from mania.preprocessing.molecular_partner_metadata_io import read_strict_json
 
@@ -47,7 +61,7 @@ def read_run_summary(root: str | Path) -> RunSummary | ExploratoryRunSummary:
         else RunSummary
     )
     summary = model.model_validate_json(path.read_bytes())
-    if summary.model_dump(mode="json") != payload:
+    if summary.model_dump(mode="json") != _sasa_status_defaults(payload):
         raise ArtifactValidationError("Summary requires complete exact fields")
     if summary.status != overall_status(summary.methods):
         raise ArtifactValidationError("Summary status contradicts method states")
@@ -85,7 +99,7 @@ def _validate_run_artifacts(root: str | Path) -> ValidatedRun:
         plan_path = require_input_file(base / "run_plan.json")
         payload = read_strict_json(plan_path)
         plan = RunPlan.model_validate_json(plan_path.read_bytes())
-        if plan.model_dump(mode="json") != payload:
+        if plan.model_dump(mode="json") != _sasa_status_defaults(payload):
             raise ArtifactValidationError("Plan requires complete exact fields")
         config = read_bound_run_config(base / "effective_config.yaml")
         provenance = read_run_provenance(
@@ -329,6 +343,16 @@ def _validate_run_artifacts(root: str | Path) -> ValidatedRun:
 
                         for authority in measurement.authority:
                             verify_authority(root, authority, measurement.identity)
+                elif method.method_id in ("rmsf", "sasa"):
+                    _validate_atomic_measurement(
+                        directory,
+                        configured_system,
+                        method,
+                        config,
+                        plan,
+                        summary,
+                        provenance,
+                    )
                 elif method.method_id == "physical_windows":
                     from mania.preprocessing.physical_time_execution_io import (
                         read_preprocessing_temporal_execution,
@@ -1215,3 +1239,209 @@ def _validate_exploratory_bindings(
                         raise ArtifactValidationError(
                             "Replay values differ from exact completed per-frame inputs"
                         )
+
+
+def _validate_atomic_measurement(
+    directory: Path,
+    system: Any,
+    method: Any,
+    config: Any,
+    plan: Any,
+    summary: Any,
+    provenance: Any,
+) -> None:
+    from mania.preprocessing import run_execution as adapters
+    from mania.preprocessing.run_execution import InputExecution
+    from mania.preprocessing.trajectory_rmsd import identity_digest
+    from mania.preprocessing.trajectory_rmsf_io import read_rmsf_measurement
+    from mania.preprocessing.trajectory_sasa_io import read_sasa_measurement
+    from mania.run_config import merge_methods
+
+    measurement: Any = (
+        read_rmsf_measurement(directory)
+        if method.method_id == "rmsf"
+        else read_sasa_measurement(directory)
+    )
+    context = measurement.context
+    adapters.validate_authorities(config)
+    requested = next(
+        (
+            s
+            for s in plan.methods
+            if s.method_id == method.method_id and s.identity == method.identity
+        ),
+        None,
+    )
+    options: Any = merge_methods(config, system).get(method.method_id)
+    if (
+        requested is None
+        or requested.effective_parameters != method.effective_parameters
+        or options != measurement.options
+        or method.effective_parameters != measurement.options
+        or context.identity != method.identity
+        or context.mode != config.mode
+        or context.pbc != system.pbc
+    ):
+        raise ArtifactValidationError(
+            "Atomic source/options/mode/PBC/plan/status differs"
+        )
+    roles = {Path(name).stem for name in measurement.csv_sha256} | {
+        method.method_id + "_measurement"
+    }
+    if method.method_id == "rmsf" and measurement.reference_kind == "external":
+        roles |= {"rmsf_external_coordinates", "rmsf_atom_mapping"}
+    if set(method.artifact_roles) != roles or len(method.artifact_roles) != len(roles):
+        raise ArtifactValidationError("Atomic method output role coverage differs")
+    relative_directory = (
+        next(
+            p.directory
+            for p in plan.path_identity_map
+            if p.input_identity == method.identity
+        )
+        + "/preprocessing/"
+    )
+    for reference in summary.artifact_references:
+        if (
+            reference.path.startswith(relative_directory)
+            and Path(reference.path).stem in roles
+        ):
+            expected = next(
+                (
+                    a
+                    for a in plan.expected_artifacts
+                    if a.path == reference.path
+                    and a.role == reference.role
+                    and a.producer_method == method.method_id
+                ),
+                None,
+            )
+            if expected is None or reference.schema_version != expected.schema_version:
+                raise ArtifactValidationError(
+                    "Unknown atomic artifact role/path/schema"
+                )
+    actual_roles = {
+        a.role
+        for a in summary.artifact_references
+        if a.path.startswith(relative_directory) and a.role in roles
+    }
+    if actual_roles != roles:
+        raise ArtifactValidationError("Missing atomic method output")
+    root = (
+        system.input_binding_path.parent
+        if system.input_binding_path
+        else Path(provenance.command[3]).parent
+        if provenance.command[3] != "Python-RunConfig"
+        else system.topology.parent
+    )
+    execution = InputExecution(system, [])
+    execution.values.update(project=config.project, config_root=root)
+    reference = options.reference if method.method_id == "rmsf" else None
+    legacy_root = (
+        None
+        if all(a.path.startswith("atomic_sources/") for a in context.authority)
+        else root
+    )
+    adapters._verify_atomic_sources(
+        execution, context.authority, reference=reference, legacy_root=legacy_root
+    )
+    samples = context.samples
+    sampling = getattr(measurement, "sampling", None)
+    if sampling is not None:
+        samples = sampling.global_samples
+        position = next(
+            p for p in plan.path_identity_map if p.input_identity == context.identity
+        )
+        execution.values["execution_condition"] = (
+            system.condition
+            if system.condition is not None
+            else position.system_token + "_" + position.trajectory_token
+        )
+        loaded = adapters.load_runtime(
+            system,
+            lambda *args, **kwargs: None,
+            execution_condition=execution.values["execution_condition"],
+        )
+        if loaded.runtime is None:
+            raise ArtifactValidationError("SASA source sampling runtime is unavailable")
+        atomic_runtime: Any = loaded.runtime.runtime_object
+        try:
+            adapters.prepare_sampling(execution, loaded)
+            actual_global = adapters._atomic_samples(execution, atomic_runtime)
+            if samples != actual_global or context.source_frame_count != len(
+                atomic_runtime.trajectory
+            ):
+                raise ArtifactValidationError(
+                    "SASA global sampling/header lineage differs"
+                )
+        finally:
+            atomic_runtime.trajectory.runtime.trajectory.close()
+        adapters._verify_atomic_sources(
+            execution, context.authority, reference=reference, legacy_root=legacy_root
+        )
+    if system.physical_time is None:
+        frames = system.frames
+        expected_indexes = frames.indexes
+        if expected_indexes is None:
+            expected_indexes = tuple(
+                range(
+                    frames.start,
+                    min(
+                        frames.stop or context.source_frame_count,
+                        context.source_frame_count,
+                    ),
+                    frames.stride,
+                )
+            )
+            if frames.max_frames is not None:
+                expected_indexes = expected_indexes[: frames.max_frames]
+        if tuple(s.runtime_frame_index for s in samples) != expected_indexes or any(
+            s.requested_time_ps is not None or s.state != "observed" for s in samples
+        ):
+            raise ArtifactValidationError("Atomic actual frame selector differs")
+    else:
+        from mania.preprocessing.physical_time_sampling import (
+            _matches,
+            _requested_times,
+        )
+
+        physical = system.physical_time
+        targets = _requested_times(
+            physical.production_start_ns,
+            physical.production_end_ns,
+            physical.frame_stride_ps,
+        )
+        if (
+            context.sampling_kind != "physical"
+            or tuple(s.requested_time_ps for s in samples) != targets
+            or any(
+                s.state == "observed"
+                and not _matches(s.actual_time_ps, s.requested_time_ps)
+                for s in samples
+            )
+        ):
+            raise ArtifactValidationError("Atomic physical-time lineage differs")
+    if method.method_id == "rmsf" and measurement.reference_kind == "external":
+        coordinates, pairing = read_external_inputs(system, options, verify=True)
+        if (
+            pairing.identity != context.identity
+            or tuple(p.source for p in pairing.fit_pairs) != measurement.fit_atoms
+            or tuple(p.source for p in pairing.evaluation_pairs)
+            != measurement.evaluation_atoms
+        ):
+            raise ArtifactValidationError("RMSF ordered external mapping differs")
+        values = {a.atom: a.xyz_A for a in coordinates.atoms}
+        if (
+            identity_digest([values[p.reference] for p in pairing.fit_pairs])
+            != measurement.reference_coordinate_sha256
+        ):
+            raise ArtifactValidationError("External RMSF reference coordinates differ")
+        for role, source in (
+            ("rmsf_external_coordinates", options.reference.path),
+            ("rmsf_atom_mapping", options.reference.atom_mapping_path),
+        ):
+            if (directory / (role + ".json")).read_bytes() != cast(
+                Path, source
+            ).read_bytes():
+                raise ArtifactValidationError(
+                    "Retained RMSF external source bytes differ"
+                )

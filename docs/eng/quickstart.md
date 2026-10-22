@@ -189,8 +189,12 @@ metadata, biological annotations, comparison matching, replica availability or
 QC/reviewer records. NAMD PSF/DCD requires explicit element/time authority and
 one bound DCD. Do not fabricate these inputs. See [Configuration](configuration.md)
 and [Science](science.md). Real-input scientific qualification remains incomplete.
-RMSF, SASA and secondary-structure computation and internal PBC preparation are
-unsupported. Technical completion and artifact validation do not establish
+This public source snapshot computes RMSF and SASA; see
+[settings and usage](configuration.md#rmsf-sasa) and
+[scientific definitions](science.md#rmsf-sasa). Package metadata remains 0.2.0;
+record the public Git commit. Scientific qualification is required for each
+intended real input and use. Secondary-structure computation
+and internal PBC preparation remain unsupported. Technical completion and artifact validation do not establish
 physical suitability, biological correctness or publication readiness.
 
 ---

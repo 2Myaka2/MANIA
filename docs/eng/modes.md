@@ -93,7 +93,8 @@ methods additionally require `partners_path`. Supplied comparison/replica groups
 are considered with their own matching and availability authority.
 
 Full does not invent RMSD references, activate NaPi2b, select study QC, enable
-replay/profile outputs, or implement RMSF/SASA/secondary structure. More preset
+replay/profile outputs, or implement secondary structure. This source snapshot adds automatic eligible
+RMSF and isolated SASA to Full; see [settings](configuration.md#rmsf-sasa). More preset
 methods do not establish better scientific qualification.
 
 [Full YAML](../../examples/full.yaml) → `results-full`. The tiny retained contact
@@ -139,6 +140,16 @@ read-back. Exploratory results cannot supply scientifically qualified
 authoritative FAIR release inputs. Selected NaPi2b produces only a preliminary
 [preview](extensions.md#preview), without an official Dataset-v1 release seal.
 Basic/Custom/Full remain strict; Exploratory is not a shortcut to approval.
+
+## SASA frame stride in this source snapshot
+
+Full's automatic isolated SASA uses frame_stride=1 unless explicitly overridden.
+Custom/Exploratory use the setting only for explicit SASA; Basic has no automatic
+SASA and keeps explicit opt-in. A system override takes precedence. Two-stage
+sampling leaves all other methods and strict/Exploratory qualification unchanged.
+Genuine cross-directory absolute inputs are supported by the B-01 correction.
+See [1/2/10 settings and sparse means](configuration.md#sasa-frame-stride).
+
 
 ---
 

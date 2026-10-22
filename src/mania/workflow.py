@@ -232,6 +232,33 @@ def _provenance(
             "not_applicable",
         )
     )
+    if config.mode == "full":
+        issues += (
+            RunProvenanceIssue(
+                "warning",
+                "full_method_expansion",
+                "This development build adds applicable RMSF and isolated SASA to Full "
+                "after historical 0.2.0; exact historical replay requires "
+                "the recorded binary/runtime.",
+                stage="plan",
+            ),
+        )
+    issues += tuple(
+        RunProvenanceIssue(
+            "warning",
+            "atomic_method_parameters",
+            json.dumps(
+                {
+                    "method": s.method_id,
+                    "options": s.effective_parameters.model_dump(mode="json"),
+                },
+                sort_keys=True,
+            ),
+            stage=s.method_id,
+        )
+        for s in methods
+        if s.method_id in ("rmsf", "sasa") and s.status != "not_requested"
+    )
     model: Any = RunProvenance
     extra: dict[str, Any] = {}
     if config.mode == "exploratory":
@@ -287,11 +314,51 @@ def run(
         return _run(config, progress=progress)
 
 
+def _with_sasa_frame_stride(config: RunConfig) -> RunConfig:
+    """Record an explicit method's default without turning presets into requests."""
+    from mania.run_config import SASA, merge_methods
+
+    updates: dict[str, Any] = {}
+    if config.methods.sasa is not None:
+        option = config.methods.sasa
+        if "frame_stride" not in option.model_fields_set:
+            updates["methods"] = config.methods.model_copy(
+                update={
+                    "sasa": option.model_copy(
+                        update={"frame_stride": option.frame_stride}
+                    )
+                }
+            )
+    systems = []
+    for system in config.systems:
+        overrides = system.method_overrides
+        if overrides is not None and overrides.sasa is not None:
+            option = overrides.sasa
+            if "frame_stride" not in option.model_fields_set:
+                effective = merge_methods(config, system)["sasa"]
+                assert isinstance(effective, SASA)
+                system = system.model_copy(
+                    update={
+                        "method_overrides": overrides.model_copy(
+                            update={
+                                "sasa": option.model_copy(
+                                    update={"frame_stride": effective.frame_stride}
+                                )
+                            }
+                        )
+                    }
+                )
+        systems.append(system)
+    if any(a is not b for a, b in zip(systems, config.systems, strict=True)):
+        updates["systems"] = tuple(systems)
+    return config.model_copy(update=updates) if updates else config
+
+
 def _run(
     config: RunConfig, *, progress: Callable[[Any], None] | None = None
 ) -> RunResult:
     """Execute the validated request; failed/cancelled results remain structured."""
-    plan = build_run_plan(config)
+    plan = build_run_plan(_with_sasa_frame_stride(config))
     adapters.validate_execution_dependencies(plan)
     config = plan.effective_parameters
     started = datetime.now(UTC)
@@ -317,7 +384,30 @@ def _run(
         staging = Path(temporary)
         config_path = staging / "effective_config.yaml"
         config_path.write_text(
-            yaml.safe_dump(
+            (
+                "# Full adds applicable RMSF and isolated SASA after "
+                "historical 0.2.0 in this development build.\n"
+                if config.mode == "full"
+                else ""
+            )
+            + "".join(
+                "# Effective methods.sasa.frame_stride: "
+                + json.dumps(
+                    {
+                        "identity": row.identity.to_dict()
+                        if not isinstance(row.identity, str)
+                        else row.identity,
+                        "frame_stride": row.effective_parameters.frame_stride,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+                for row in plan.methods
+                if row.method_id == "sasa"
+                and row.status != "not_requested"
+                and hasattr(row.effective_parameters, "frame_stride")
+            )
+            + yaml.safe_dump(
                 config.model_dump(mode="json", exclude_unset=True),
                 allow_unicode=True,
                 sort_keys=False,
@@ -459,6 +549,8 @@ def _run(
                     "clustering",
                     "rg",
                     "rmsd",
+                    "rmsf",
+                    "sasa",
                     "physical_windows",
                     "lipid_contacts",
                     "glycan_contacts",
@@ -470,6 +562,27 @@ def _run(
                     status = statuses[index]
                     if status.status != "planned":
                         continue
+                    resolved_atomic = None
+                    if method in ("rmsf", "sasa"):
+                        assert loaded is not None
+                        try:
+                            resolved_atomic = adapters.resolve_atomic_method(
+                                execution, loaded, method, status.effective_parameters
+                            )
+                        except adapters.AtomicEligibilityError as exc:
+                            if status.request_origin != "preset":
+                                raise
+                            statuses[index] = status.model_copy(
+                                update={
+                                    "status": "missing_optional_input",
+                                    "reason_code": method
+                                    + "_eligibility_unestablished",
+                                    "message": str(exc),
+                                }
+                            )
+                            execution.statuses = [statuses[i] for i in indices]
+                            notify({"event": "method_done", "method": statuses[index]})
+                            continue
                     statuses[index] = status.model_copy(update={"status": "running"})
                     notify(
                         {"stage": method, "identity": position.input_identity.to_dict()}
@@ -569,6 +682,16 @@ def _run(
                     elif method == "rmsd":
                         assert loaded is not None
                         adapters.execute_rmsd(execution, loaded, options, preprocessing)
+                    elif method == "rmsf":
+                        assert resolved_atomic is not None
+                        adapters.execute_rmsf(
+                            execution, resolved_atomic, options, preprocessing
+                        )
+                    elif method == "sasa":
+                        assert resolved_atomic is not None
+                        adapters.execute_sasa(
+                            execution, resolved_atomic, options, preprocessing
+                        )
                     elif method in (
                         "physical_windows",
                         "lipid_contacts",
@@ -599,8 +722,13 @@ def _run(
                             "reason_code": method_reason,
                             "artifact_roles": tuple(r for r, _, _ in new),
                             "message": (
-                                "Retained API execution and serialization completed"
-                            ),
+                                "Full adds this applicable Core method "
+                                "after historical 0.2.0. "
+                                if method in ("rmsf", "sasa")
+                                and status.request_origin == "preset"
+                                else ""
+                            )
+                            + ("Retained API execution and serialization completed"),
                         }
                     )
                     execution.statuses = [statuses[i] for i in indices]

@@ -1,6 +1,18 @@
-# MANIA 0.2.0
+# MANIA source snapshot · снимок исходников
 
 **[Русское руководство](docs/rus/README.md) · [English guide](docs/eng/README.md)**
+
+This public source snapshot includes RMSF, isolated/with-environment SASA,
+SASA `frame_stride`, B-01 source-path compatibility and the 3,840-point default.
+Package metadata remains **0.2.0**; this is a source-branch update, not a new
+numbered software release. Record the public Git commit when identifying this
+code: version 0.2.0 alone cannot distinguish it from the initial public snapshot.
+
+Этот публичный снимок исходников включает RMSF, isolated/with-environment SASA,
+SASA `frame_stride`, исправление путей B-01 и сетку по умолчанию из 3840 точек.
+Версия в метаданных остаётся **0.2.0**; это обновление ветки исходников, а не
+новый нумерованный выпуск. Для идентификации кода сохраняйте публичный Git commit:
+одной версии 0.2.0 недостаточно для отличия от первоначального публичного снимка.
 
 MANIA analyzes molecular trajectories from an explicit YAML request and records
 scientific CSV/JSON, method statuses and provenance. Implemented methods include
@@ -50,14 +62,20 @@ or externally prepared coordinates with appropriate evidence. Exploratory reads
 explicitly unverified coordinates as supplied and always records
 `SCIENTIFIC_VALIDATION_NOT_PERFORMED`, `authoritative_release_eligible=false`
 and, when applicable, `PBC_UNVERIFIED`. There is no internal MIC, wrap, unwrap or
-centering. RMSF, SASA and secondary-structure computation are not implemented.
+centering. This source snapshot computes RMSF/SASA; see the
+[settings](docs/eng/configuration.md#rmsf-sasa) and
+[definitions](docs/eng/science.md#rmsf-sasa). Technical verification is separate
+from scientific qualification of each intended input and use. Secondary-structure computation remains unimplemented.
 Real-input scientific qualification is incomplete; technical success and artifact
 integrity do not establish biological correctness or publication readiness.
 
 Строгие режимы требуют непериодических либо внешне подготовленных координат
 с соответствующими доказательствами. Exploratory читает явно непроверенные
 координаты как есть и сохраняет указанные признаки неполной квалификации.
-Внутренних MIC, wrap, unwrap и центрирования нет. RMSF, SASA и вторичная структура
-не вычисляются. Научная квалификация реальных входов не завершена; технический
+Внутренних MIC, wrap, unwrap и центрирования нет. Этот снимок вычисляет
+RMSF/SASA; см. [настройки](docs/rus/configuration.md#rmsf-sasa)
+и [определения](docs/rus/science.md#rmsf-sasa). Техническая проверка отделена
+от научной квалификации каждого предполагаемого входа и применения. Вторичная структура не вычисляется. Научная квалификация реальных
+входов не завершена; технический
 успех и целостность артефактов не доказывают правильность биологии или готовность
 к научной публикации.

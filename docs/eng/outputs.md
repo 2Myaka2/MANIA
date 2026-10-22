@@ -213,6 +213,79 @@ incomplete work produces no completed preview manifest. Official Dataset-v1
 readers reject preview. No official `release/dataset_manifest.json`, release
 provenance or publication seal is produced. See [Extensions](extensions.md#preview).
 
+<a id="rmsf-sasa"></a>
+## RMSF and SASA in this source snapshot artifact families
+
+Files live under `systems/sNNNN/tNNNN/preprocessing/` and exist only for completed
+selected methods. Published 0.2.0 artifacts remain readable and unchanged. Legacy
+optional column names are preserved and are not repurposed as these measurements.
+
+| File | Content |
+| --- | --- |
+| `rmsf_atoms.csv` | Ordered source atom keys, `rmsf_A`, `observed_frame_count` |
+| `rmsf_samples.csv` | Complete requested roster: requested sample/time, observed/missing state, runtime/source/prepared index, actual time/delta, reason |
+| `rmsf_measurement.json` | `mania.rmsf_measurement.v1`: context, options, source rosters/hashes, actual reference and fit coordinates/hash, N, means/M2, precision/proper rotation/equal weighting/N divisor, CSV digests |
+| `rmsf_external_coordinates.json`, `rmsf_atom_mapping.json` | Only for external reference: exact retained input documents, no invented correspondence |
+| `sasa_atom_frames.csv`, `sasa_residue_frames.csv`, `sasa_total_frames.csv` | Variant and full sample identity; selected target atom/residue identities; `sasa_A2`; atom rows also `accessible_points` |
+| `sasa_atom_means.csv`, `sasa_residue_means.csv`, `sasa_total_means.csv` | Variant, target identity when applicable, observed N, `mean_sasa_A2` |
+| `sasa_measurement.json` | `mania.sasa_measurement.v1`: context, exact options/rationale, target/environment rosters/hashes, Bondi registry/hash/DOIs, used radii, probe, grid ID/count/hash, precision, strict occlusion, integer counts and CSV digests |
+
+CSV is UTF-8 with LF and fixed ordered headers; null is empty, valid zero is `0`.
+Float64 values use 17 significant digits. JSON is closed and versioned. Source
+atom keys retain engine, atom index/name, chain, segment, residue/insertion/name,
+element and altloc; residues use that full residue key. Means include observed
+frames only. No environment surface or residue-averaged RMSF is exported.
+
+Read-back regenerates CSV from the closed measurement, verifies identity, role,
+schema, populations, exact sample order, reference and authority hashes, N, counts,
+means/sums, options and grid/radius registry. Changing a digest alone does not make
+a corrupted family valid. Strict/Exploratory qualification and original/prepared
+lineage remain explicit. The rationale is retained in measurement options and
+provenance parameters; it is an owner statement, not a validation certificate.
+Outputs do not establish PBC suitability, biology or publication readiness.
+See [settings](configuration.md#rmsf-sasa) and [formulas](science.md#rmsf-sasa).
+
+
+<a id="sasa-frame-stride"></a>
+## Additive SASA sampling and atomic source bindings
+
+This source snapshot retains `mania.sasa_measurement.v1` with an additive
+`sampling` record: full `global_samples`, `selected_global_ordinals`,
+`global_requested_count`, `requested_count`, `observed_count`, `processed_count`,
+`missing_count`, `invalid_count`, `failed_count` and `unavailable_time_reason`.
+Completed measurements have processed=observed>0 and failed_count=0. Failed runs
+retain honest run/method status; no fraudulent zero/mean is sealed.
+
+`context.samples[].requested_sample_index` is the contiguous **local SASA** ordinal.
+`selected_global_ordinals[local]` maps it to the global request, whose original
+source/prepared indices, actual time, state and reason remain unchanged. New
+SASA frame CSVs add `global_requested_sample_index` and `actual_time_reason`;
+other columns/units and all non-SASA CSVs are unchanged. Means' existing
+`observed_frame_count` is N of processed SASA frames, not global M/requested K.
+
+`mania artifacts validate` reconstructs G from the effective global request and
+actual source/header metadata using the existing optional MD loader, without
+calling a scientific kernel. It verifies selected global/local/source/prepared/time
+correspondence, both variant populations, counts, null/zero distinctions and
+means even after ordinary hashes are resealed. This source-lineage validation of
+new SASA artifacts requires the optional MD runtime and access to declared inputs.
+Older first-candidate v1 SASA records without these fields remain readable only
+under the constrained original stride1/full-population contract; no evidence is
+rewritten or silently relabeled.
+
+New RMSF/SASA authority paths are portable role/content locators of the form
+`atomic_sources/<role>/<ordinal>/<sha256>/<basename>`. They are not paths to join
+under `/` or YAML's directory. The resolver reconstructs them solely from the exact
+typed effective-config source roster and verifies canonical regular files,
+source identity and actual digest. Topology, ordered trajectories, binding/
+preparation evidence, NAMD element/time controls and explicit RMSF reference/mapping
+have separate roles. Original legacy relative authority records use their original
+strict resolution rules. No older authority consumer or InputBinding is changed.
+These checks establish technical lineage, not PBC/biology/scientific acceptance.
+
+
 ---
 
 [Guide home](README.md) · [Русский](../rus/outputs.md)
+
+New SASA measurements use `mania.sasa.fibonacci3840.v1`, 3,840 points, and grid SHA256 `bd52bac9426729dcd0fff5445562eefe3745ea4cb8be70e04b80124ca31871f0`. The unchanged `mania.sasa_measurement.v1` reader also accepts authentic historical `mania.sasa.fibonacci960.v1` measurements only with 960 points and SHA256 `89662d78956cad341fdeddaddc793c36e5971c733fe9e832e6442a81399132dd`. Each identity/count/hash combination is closed; count bounds and area divisors follow that validated grid. Only historical 960 artifacts may omit the original sampling fields. There is no YAML point-count setting. Historical 960 results and failures retain their original interpretation; denser sampling does not establish independent scientific acceptance.
